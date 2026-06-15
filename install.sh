@@ -125,23 +125,26 @@ rm -f "$REG_FILE" "$DOTNET_EXE" "$NUPKG_FILE"
 rm -rf "$TEMP_EXTRACT"
 
 # 6. Configure Firewall for OSC ports
-echo -e "${BLUE}Configuring firewall for OSC ports (9000/9001 UDP)...${NC}"
+echo -e "${BLUE}Configuring firewall for OSC and OSCQuery mDNS ports (9000/9001/5353 UDP)...${NC}"
 if command -v firewall-cmd &>/dev/null; then
     echo "Using firewalld to open ports..."
     sudo firewall-cmd --add-port=9000/udp --permanent || true
     sudo firewall-cmd --add-port=9001/udp --permanent || true
+    sudo firewall-cmd --add-port=5353/udp --permanent || true
     sudo firewall-cmd --reload || true
 elif command -v ufw &>/dev/null; then
     echo "Using UFW to open ports..."
     sudo ufw allow 9000/udp || true
     sudo ufw allow 9001/udp || true
+    sudo ufw allow 5353/udp || true
     sudo ufw reload || true
 elif command -v iptables &>/dev/null; then
     echo "Using iptables to open ports..."
     sudo iptables -I INPUT -p udp --dport 9000 -j ACCEPT || true
     sudo iptables -I INPUT -p udp --dport 9001 -j ACCEPT || true
+    sudo iptables -I INPUT -p udp --dport 5353 -j ACCEPT || true
 else
-    echo "No supported firewall manager (firewalld, UFW, iptables) found. Please ensure UDP ports 9000 and 9001 are open if you experience connection issues."
+    echo "No supported firewall manager (firewalld, UFW, iptables) found. Please ensure UDP ports 9000, 9001, and 5353 are open if you experience connection issues."
 fi
 
 # 7. Create Launch Script & Desktop Entry
