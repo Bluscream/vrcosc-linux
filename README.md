@@ -36,3 +36,10 @@ Once installed, you can launch VRCOSC:
   ```bash
   vrcosc
   ```
+
+## Credits & AI Disclaimer
+
+This project was created and is maintained with the help of **Antigravity**, an agentic AI coding assistant designed by **Google DeepMind**.
+
+*Disclaimer: The installation scripts and configuration modifications were generated and validated programmatically. Use at your own risk.*
+
