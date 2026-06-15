@@ -146,7 +146,7 @@ Exec=$LAUNCH_SCRIPT
 Icon=steam
 Terminal=false
 Type=Application
-Categories=Game;Utility;
+Categories=Game;
 EOF
 
 echo -e "${GREEN}=== VRCOSC Setup Complete! ===${NC}"
