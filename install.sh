@@ -151,3 +151,9 @@ EOF
 
 echo -e "${GREEN}=== VRCOSC Setup Complete! ===${NC}"
 echo -e "You can launch VRCOSC from your application menu, or run '${BLUE}vrcosc${NC}' in the terminal."
+echo -e "\n${BLUE}VRCOSC Directory Paths:${NC}"
+echo -e "  * ${GREEN}Config Folder (Profiles & Settings):${NC}"
+echo -e "    $VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Roaming/VRCOSC"
+echo -e "  * ${GREEN}Executable Folder (App Files):${NC}"
+echo -e "    $VRCOSC_DIR"
+
