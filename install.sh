@@ -55,6 +55,8 @@ fi
 if flatpak list | grep -q "protontricks"; then
     echo -e "${BLUE}Updating flatpak permissions for protontricks...${NC}"
     flatpak override --user --filesystem=host com.github.Matoking.protontricks || true
+    flatpak override --user --talk-name=org.mpris.MediaPlayer2.* com.github.Matoking.protontricks || true
+    flatpak override --user --talk-name=org.freedesktop.Flatpak com.github.Matoking.protontricks || true
 fi
 
 # 3. Apply WPF Hardware Acceleration Fix
@@ -108,7 +110,7 @@ echo -e "${BLUE}Installing VRCOSC to $VRCOSC_DIR...${NC}"
 mkdir -p "$VRCOSC_DIR"
 
 # Clean old installation folder if it exists
-rm -rf "$VRCOSC_DIR"/*
+rm -rf "$VRCOSC_DIR/*"
 
 # Nupkg contains files inside lib/app/
 TEMP_EXTRACT="/tmp/vrcosc-extract"
