@@ -37,20 +37,14 @@ bash install.sh [OPTIONS]
 
 | Option | Description |
 | :--- | :--- |
+| `-b, --backup` | Create a high-compression backup (`.7z` / `.tar.xz`) of VRCOSC configs & prefix registries to Desktop |
 | `-f, --force` | Force re-download and reinstall of .NET 10 and VRCOSC binaries |
-| `-b, --branch <live\|beta>` | Choose release channel (`live` or `beta`, defaults to `live`) |
+| `--branch <live\|beta>` | Choose release channel (`live` or `beta`, defaults to `live`) |
 | `-u, --uninstall` | Cleanly remove VRCOSC binaries, launcher script, and desktop shortcut (preserves user settings) |
 | `--dry-run` | Simulate actions without modifying files or installing runtimes |
 | `--skip-firewall` | Skip firewall inspection and rule generation |
 | `--prefix <PATH>` | Explicitly supply your custom VRChat compatdata/438100 path |
 | `-h, --help` | Show command usage and options |
-
-### Environment Variables
-
-You can also pass configuration options directly via environment variables:
-```bash
-VRCOSC_BRANCH="beta" FORCE_INSTALL=1 bash install.sh
-```
 
 ## Running VRCOSC
 

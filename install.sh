@@ -16,13 +16,14 @@ readonly DISCORD_INVITE="https://discord.gg/vrcosc-1000862183963496519"
 readonly DISCORD_THREAD="https://discord.com/channels/1000862183963496519/1466540047149957374"
 readonly ICON_URL="https://raw.githubusercontent.com/VolcanicArts/VRCOSC/main/Logo.png"
 
-# Configurable options via Flags or Environment Variables
-VRCOSC_BRANCH="${VRCOSC_BRANCH:-live}" # live or beta
-FORCE_INSTALL="${FORCE_INSTALL:-0}"
+# Default state variables (configured solely via command-line arguments)
+VRCOSC_BRANCH="live" # live or beta
+FORCE_INSTALL=0
 UNINSTALL_MODE=0
-DRY_RUN="${DRY_RUN:-0}"
-SKIP_FIREWALL="${SKIP_FIREWALL:-0}"
-VRC_COMPATDATA="${VRC_COMPATDATA:-}"
+BACKUP_MODE=0
+DRY_RUN=0
+SKIP_FIREWALL=0
+VRC_COMPATDATA=""
 
 log_info()    { echo -e "${BLUE}$*${NC}"; }
 log_success() { echo -e "${GREEN}$*${NC}"; }
@@ -52,24 +53,23 @@ print_usage() {
     echo "  bash install.sh [OPTIONS]"
     echo ""
     echo -e "${BOLD}Options:${NC}"
+    echo "  -b, --backup              Create a high-compression backup of VRCOSC configs & prefix registries to Desktop"
     echo "  -f, --force               Force re-download and re-installation of .NET and VRCOSC"
-    echo "  -b, --branch <live|beta>  Specify release channel to install (default: live)"
+    echo "      --branch <live|beta>  Specify release channel to install (default: live)"
     echo "  -u, --uninstall           Uninstall VRCOSC binaries, launcher script, and desktop shortcut"
     echo "      --dry-run             Simulate actions without writing files or running installers"
     echo "      --skip-firewall       Do not attempt firewall port configuration"
     echo "      --prefix <PATH>       Explicitly specify the VRChat compatdata/438100 folder"
     echo "  -h, --help                Show this help message"
-    echo ""
-    echo -e "${BOLD}Environment Variables:${NC}"
-    echo "  VRC_COMPATDATA            Custom path to 438100 compatdata"
-    echo "  VRCOSC_BRANCH             \"live\" or \"beta\" (default: \"live\")"
-    echo "  FORCE_INSTALL             Set to 1 to force reinstallation"
-    echo "  SKIP_FIREWALL             Set to 1 to skip firewall configuration"
 }
 
 parse_arguments() {
     while [ $# -gt 0 ]; do
         case "$1" in
+            -b|--backup)
+                BACKUP_MODE=1
+                shift
+                ;;
             -f|--force)
                 FORCE_INSTALL=1
                 shift
@@ -78,7 +78,7 @@ parse_arguments() {
                 UNINSTALL_MODE=1
                 shift
                 ;;
-            -b|--branch)
+            --branch)
                 if [ -n "${2:-}" ]; then
                     VRCOSC_BRANCH="$2"
                     shift 2
@@ -201,9 +201,90 @@ locate_vrchat_prefix() {
         log_success "Using VRChat prefix at: $VRC_COMPATDATA"
     else
         log_error "Error: Running non-interactively and prefix was not found."
-        echo "Set VRC_COMPATDATA=/path/to/compatdata/438100 or pass --prefix <PATH>."
+        echo "Pass --prefix <PATH> explicitly."
         exit 1
     fi
+}
+
+create_backup() {
+    log_info "Initiating VRCOSC and prefix backup..."
+    locate_vrchat_prefix
+
+    local desktop_dir
+    desktop_dir="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
+    mkdir -p "$desktop_dir"
+
+    local timestamp
+    timestamp="$(date +%s)"
+    local stage_dir="/tmp/vrcosc_backup_${timestamp}"
+    mkdir -p "$stage_dir"
+
+    # Collect important user configurations and registry states
+    local items_found=0
+
+    # 1. Config directories (Roaming/VRCOSC, Roaming/VRCOSC-Beta, Roaming/VRCOSC-Dev)
+    for u in "$VRC_COMPATDATA/pfx/drive_c/users/"*; do
+        if [ -d "$u/AppData/Roaming/VRCOSC" ]; then
+            local username
+            username="$(basename "$u")"
+            mkdir -p "$stage_dir/users/${username}/AppData/Roaming"
+            cp -a "$u/AppData/Roaming/VRCOSC" "$stage_dir/users/${username}/AppData/Roaming/"
+            items_found=1
+        fi
+        if [ -d "$u/AppData/Roaming/VRCOSC-Beta" ]; then
+            local username
+            username="$(basename "$u")"
+            mkdir -p "$stage_dir/users/${username}/AppData/Roaming"
+            cp -a "$u/AppData/Roaming/VRCOSC-Beta" "$stage_dir/users/${username}/AppData/Roaming/"
+            items_found=1
+        fi
+    done
+
+    # Prune any broken or circular symbolic links to avoid compression errors
+    find "$stage_dir" -xtype l -delete 2>/dev/null || true
+
+    # 2. Wine prefix registry files
+    for reg in "user.reg" "system.reg"; do
+        if [ -f "$VRC_COMPATDATA/pfx/$reg" ]; then
+            cp "$VRC_COMPATDATA/pfx/$reg" "$stage_dir/"
+            items_found=1
+        fi
+    done
+
+    # 3. Launchers & desktop shortcuts
+    for f in "$HOME/.local/bin/vrcosc" "$HOME/.local/bin/vrcosc-beta" \
+             "$HOME/.local/share/applications/vrcosc.desktop" "$HOME/.local/share/applications/vrcosc-beta.desktop"; do
+        if [ -f "$f" ]; then
+            mkdir -p "$stage_dir/launchers"
+            cp "$f" "$stage_dir/launchers/"
+            items_found=1
+        fi
+    done
+
+    if [ "$items_found" -eq 0 ]; then
+        log_warn "No VRCOSC configurations or registries found to backup."
+        rm -rf "$stage_dir"
+        return 0
+    fi
+
+    local archive_path=""
+    if command -v 7z &>/dev/null; then
+        archive_path="$desktop_dir/VRCOSC_backup_${timestamp}.7z"
+        log_info "Compressing backup using 7z (LZMA2 ultra compression)..."
+        7z a -t7z -m0=lzma2 -mx=9 -snl -bso0 -bsp0 "$archive_path" "$stage_dir"/*
+    elif command -v tar &>/dev/null && command -v xz &>/dev/null; then
+        archive_path="$desktop_dir/VRCOSC_backup_${timestamp}.tar.xz"
+        log_info "Compressing backup using tar.xz (max compression)..."
+        XZ_OPT="-9e" tar -cJf "$archive_path" -C "$stage_dir" .
+    else
+        archive_path="$desktop_dir/VRCOSC_backup_${timestamp}.tar.gz"
+        log_info "Compressing backup using tar.gz..."
+        tar -czf "$archive_path" -C "$stage_dir" .
+    fi
+
+    rm -rf "$stage_dir"
+    log_success "Backup created successfully:"
+    echo -e "  * ${CYAN}${archive_path}${NC}"
 }
 
 configure_protontricks_permissions() {
@@ -240,7 +321,7 @@ EOF
 install_dotnet_runtime() {
     local installed_dotnet="$VRC_COMPATDATA/pfx/drive_c/Program Files/dotnet/dotnet.exe"
     if [ -f "$installed_dotnet" ] && [ "$FORCE_INSTALL" -ne 1 ]; then
-        log_success ".NET Runtime already present in prefix ($installed_dotnet). Skipping download (use --force to reinstall)."
+        log_success ".NET Runtime already present in prefix ($installed_dotnet). Skipping download (use -f/--force to reinstall)."
         return 0
     fi
 
@@ -463,6 +544,11 @@ uninstall_vrcosc() {
 
 main() {
     parse_arguments "$@"
+
+    if [ "$BACKUP_MODE" -eq 1 ]; then
+        create_backup
+        exit 0
+    fi
 
     if [ "$UNINSTALL_MODE" -eq 1 ]; then
         uninstall_vrcosc
