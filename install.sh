@@ -65,6 +65,11 @@ get_vrcosc_install_dir() {
     [ "${1:-$VRCOSC_BRANCH}" = "beta" ] && echo "$base/VRCOSC-beta" || echo "$base/VRCOSC"
 }
 
+get_vrchat_game_dir() {
+    local steamapps_dir="$(dirname "$(dirname "$VRC_COMPATDATA")")"
+    echo "$steamapps_dir/common/VRChat"
+}
+
 get_all_installed_files() {
     echo "$(get_launcher_script live)" \
          "$(get_launcher_script beta)" \
@@ -398,6 +403,18 @@ show_diagnostics() {
     echo -e "  * Desktop (Beta):          $([ -f "$d_beta" ] && echo -e "${CYAN}Present ($d_beta)${NC}" || echo -e "${YELLOW}Missing${NC}")"
     echo -e "  * Icon:                    $([ -f "$icon_path" ] && echo -e "${CYAN}Present ($icon_path)${NC}" || echo -e "${YELLOW}Missing${NC}")"
 
+    local vrc_game_dir="$(get_vrchat_game_dir)"
+    local target_launch="$vrc_game_dir/launch.exe"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local source_bridge="$script_dir/bin/vrc-launch-bridge.exe"
+    local bridge_status="${YELLOW}Unpatched / Missing${NC}"
+    if [ -f "$target_launch" ] && [ -f "$source_bridge" ] && cmp -s "$source_bridge" "$target_launch"; then
+        bridge_status="${GREEN}Patched (Linux IPC Named-Pipe Bridge)${NC}"
+    elif [ -f "$target_launch" ]; then
+        bridge_status="${YELLOW}Stock launch.exe (Unpatched)${NC}"
+    fi
+    echo -e "  * VRChat Launch Bridge:    ${bridge_status}"
+
     echo ""
     echo -e "${BOLD}=== Community & Support ===${NC}"
     echo -e "  * Server Invite:           ${CYAN}${DISCORD_INVITE}${NC}"
@@ -633,6 +650,50 @@ install_application_icon() {
     fi
 }
 
+patch_vrchat_launch_bridge() {
+    log_info "Checking VRChat launch.exe for Linux IPC named-pipe bridge patch..."
+    [ "$DRY_RUN" -eq 1 ] && return 0
+
+    local vrc_game_dir="$(get_vrchat_game_dir)"
+    local target_launch="$vrc_game_dir/launch.exe"
+    local backup_launch="$vrc_game_dir/launch.org.exe"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local source_bridge="$script_dir/bin/vrc-launch-bridge.exe"
+
+    if [ ! -d "$vrc_game_dir" ]; then
+        log_warn "VRChat game directory not found ($vrc_game_dir). Skipping launch.exe patch."
+        return 0
+    fi
+
+    if [ ! -f "$source_bridge" ]; then
+        log_warn "vrc-launch-bridge.exe not found at $source_bridge. Skipping patch."
+        return 0
+    fi
+
+    # Backup original launch.exe if launch.org.exe does not exist
+    if [ ! -f "$backup_launch" ]; then
+        if [ -f "$target_launch" ]; then
+            log_info "Creating read-only backup of original launch.exe -> launch.org.exe..."
+            cp -p "$target_launch" "$backup_launch"
+            chmod 444 "$backup_launch"
+        fi
+    fi
+
+    # Compare checksum or size to see if already patched
+    if [ -f "$target_launch" ] && cmp -s "$source_bridge" "$target_launch"; then
+        log_success "VRChat launch.exe is already patched with the Linux IPC bridge."
+        chmod 555 "$target_launch" 2>/dev/null || true
+        return 0
+    fi
+
+    log_info "Installing Linux IPC launch.exe wrapper into VRChat directory..."
+    # If target is read-only, remove write protection temporarily to replace
+    rm -f "$target_launch" 2>/dev/null || chmod 755 "$target_launch" 2>/dev/null || true
+    cp "$source_bridge" "$target_launch"
+    chmod 555 "$target_launch"
+    log_success "VRChat launch.exe patched successfully (read-only 555)."
+}
+
 create_launchers() {
     log_info "Creating launch script and desktop entry..."
     [ "$DRY_RUN" -eq 1 ] && return 0
@@ -739,6 +800,7 @@ main() {
     install_vrcosc
     configure_firewall
     install_application_icon
+    patch_vrchat_launch_bridge
     create_launchers
 }
 

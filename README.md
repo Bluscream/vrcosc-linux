@@ -12,7 +12,11 @@ This installer configures VRCOSC to run seamlessly by:
 3. **Silently provisioning .NET 10.0 Desktop Runtime** directly inside VRChat's Proton prefix (skips download if already installed).
 4. **Installing VRCOSC binaries** into the prefix's AppData directory.
 5. **Configuring firewall rules** for OSC/OSCQuery ports (9000, 9001, 5353 UDP).
-6. **Setting up official application branding and desktop integration** (`vrcosc.png` hicolor icon, `vrcosc.desktop` launcher, and terminal command `vrcosc`).
+6. **Patching VRChat's `launch.exe` with a Linux IPC Named-Pipe Bridge**:
+   - VRChat ships a Windows launcher (`launch.exe`) that fails under Proton when companion tools (like VRCX or external launchers) request in-game world/instance navigation via `\\.\pipe\VRChatURLLaunchPipe`.
+   - The installer creates a read-only backup (`launch.org.exe`, `chmod 444`) and places a drop-in C# replacement bridge (`launch.exe`, `chmod 555`).
+   - The bridge directly communicates with VRChat's named pipe to open in-game world menus in real-time, falling back cleanly to the original binary if VRChat isn't running.
+7. **Setting up official application branding and desktop integration** (`vrcosc.png` hicolor icon, `vrcosc.desktop` launcher, and terminal command `vrcosc`).
 
 ## Prerequisites
 
@@ -37,7 +41,7 @@ bash install.sh [OPTIONS]
 
 | Option | Description |
 | :--- | :--- |
-| `-i, --info` | Display diagnostic system, prefix, runtime, and VRCOSC environment details |
+| `-i, --info` | Display diagnostic system, prefix, runtime, VRCOSC, and VRChat IPC bridge details |
 | `-b, --backup` | Create a high-compression backup (`.7z` / `.tar.xz`) of VRCOSC configs & prefix registries to Desktop |
 | `-f, --force` | Force re-download and reinstall of .NET 10 and VRCOSC binaries |
 | `--branch <live\|beta>` | Choose release channel (`live` or `beta`, defaults to `live`) |
