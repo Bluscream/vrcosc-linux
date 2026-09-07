@@ -8,12 +8,32 @@ readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly BLUE='\033[0;34m'
 readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
 readonly NC='\033[0;0m' # No Color
+
+readonly DISCORD_INVITE="https://discord.gg/vrcosc-1000862183963496519"
+readonly DISCORD_THREAD="https://discord.com/channels/1000862183963496519/1466540047149957374"
 
 log_info()    { echo -e "${BLUE}$*${NC}"; }
 log_success() { echo -e "${GREEN}$*${NC}"; }
 log_warn()    { echo -e "${YELLOW}$*${NC}"; }
 log_error()   { echo -e "${RED}$*${NC}"; }
+
+on_error() {
+    local exit_code="$?"
+    local line_no="$1"
+    echo ""
+    log_error "============================================================"
+    log_error " Installation encountered an error (exit code $exit_code at line $line_no)!"
+    log_error "============================================================"
+    echo -e "${YELLOW}Need help or ran into an unexpected bug? Join the VRCOSC Discord:${NC}"
+    echo -e "  * Server Invite:  ${CYAN}${DISCORD_INVITE}${NC}"
+    echo -e "  * Linux Thread:   ${CYAN}${DISCORD_THREAD}${NC}"
+    echo ""
+    exit "$exit_code"
+}
+
+trap 'on_error $LINENO' ERR
 
 check_dependencies() {
     log_info "Verifying dependencies..."
