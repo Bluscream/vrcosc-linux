@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# VRCOSC automated installer and runner setup script for Bazzite / Linux
+# VRCOSC automated installer, updater, and runner setup script for Bazzite / Linux
 set -euo pipefail
 
 # Visual styling
@@ -9,10 +9,20 @@ readonly GREEN='\033[0;32m'
 readonly BLUE='\033[0;34m'
 readonly YELLOW='\033[1;33m'
 readonly CYAN='\033[0;36m'
+readonly BOLD='\033[1m'
 readonly NC='\033[0;0m' # No Color
 
 readonly DISCORD_INVITE="https://discord.gg/vrcosc-1000862183963496519"
 readonly DISCORD_THREAD="https://discord.com/channels/1000862183963496519/1466540047149957374"
+readonly ICON_URL="https://raw.githubusercontent.com/VolcanicArts/VRCOSC/main/Logo.png"
+
+# Configurable options via Flags or Environment Variables
+VRCOSC_BRANCH="${VRCOSC_BRANCH:-live}" # live or beta
+FORCE_INSTALL="${FORCE_INSTALL:-0}"
+UNINSTALL_MODE=0
+DRY_RUN="${DRY_RUN:-0}"
+SKIP_FIREWALL="${SKIP_FIREWALL:-0}"
+VRC_COMPATDATA="${VRC_COMPATDATA:-}"
 
 log_info()    { echo -e "${BLUE}$*${NC}"; }
 log_success() { echo -e "${GREEN}$*${NC}"; }
@@ -35,6 +45,78 @@ on_error() {
 
 trap 'on_error $LINENO' ERR
 
+print_usage() {
+    echo -e "${BOLD}VRCOSC Linux Installer & Manager${NC}"
+    echo ""
+    echo -e "${BOLD}Usage:${NC}"
+    echo "  bash install.sh [OPTIONS]"
+    echo ""
+    echo -e "${BOLD}Options:${NC}"
+    echo "  -f, --force               Force re-download and re-installation of .NET and VRCOSC"
+    echo "  -b, --branch <live|beta>  Specify release channel to install (default: live)"
+    echo "  -u, --uninstall           Uninstall VRCOSC binaries, launcher script, and desktop shortcut"
+    echo "      --dry-run             Simulate actions without writing files or running installers"
+    echo "      --skip-firewall       Do not attempt firewall port configuration"
+    echo "      --prefix <PATH>       Explicitly specify the VRChat compatdata/438100 folder"
+    echo "  -h, --help                Show this help message"
+    echo ""
+    echo -e "${BOLD}Environment Variables:${NC}"
+    echo "  VRC_COMPATDATA            Custom path to 438100 compatdata"
+    echo "  VRCOSC_BRANCH             \"live\" or \"beta\" (default: \"live\")"
+    echo "  FORCE_INSTALL             Set to 1 to force reinstallation"
+    echo "  SKIP_FIREWALL             Set to 1 to skip firewall configuration"
+}
+
+parse_arguments() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -f|--force)
+                FORCE_INSTALL=1
+                shift
+                ;;
+            -u|--uninstall)
+                UNINSTALL_MODE=1
+                shift
+                ;;
+            -b|--branch)
+                if [ -n "${2:-}" ]; then
+                    VRCOSC_BRANCH="$2"
+                    shift 2
+                else
+                    log_error "Error: --branch requires an argument (live or beta)."
+                    exit 1
+                fi
+                ;;
+            --prefix)
+                if [ -n "${2:-}" ]; then
+                    VRC_COMPATDATA="$2"
+                    shift 2
+                else
+                    log_error "Error: --prefix requires a directory path."
+                    exit 1
+                fi
+                ;;
+            --dry-run)
+                DRY_RUN=1
+                shift
+                ;;
+            --skip-firewall)
+                SKIP_FIREWALL=1
+                shift
+                ;;
+            -h|--help)
+                print_usage
+                exit 0
+                ;;
+            *)
+                log_warn "Unknown argument: $1"
+                print_usage
+                exit 1
+                ;;
+        esac
+    done
+}
+
 check_dependencies() {
     log_info "Verifying dependencies..."
     local missing=()
@@ -52,11 +134,17 @@ check_dependencies() {
 
 locate_vrchat_prefix() {
     log_info "Locating VRChat Proton prefix..."
-    VRC_COMPATDATA="${VRC_COMPATDATA:-}"
 
-    if [ -n "$VRC_COMPATDATA" ] && [ -d "$VRC_COMPATDATA/pfx" ]; then
-        log_success "Using pre-configured VRChat prefix: $VRC_COMPATDATA"
-        return 0
+    if [ -n "$VRC_COMPATDATA" ]; then
+        VRC_COMPATDATA="${VRC_COMPATDATA/#\~/$HOME}"
+        if [ -d "$VRC_COMPATDATA/pfx" ]; then
+            log_success "Using pre-configured VRChat prefix: $VRC_COMPATDATA"
+            return 0
+        elif [ -d "$VRC_COMPATDATA/compatdata/438100/pfx" ]; then
+            VRC_COMPATDATA="$VRC_COMPATDATA/compatdata/438100"
+            log_success "Using pre-configured VRChat prefix: $VRC_COMPATDATA"
+            return 0
+        fi
     fi
 
     local candidate_paths=(
@@ -113,14 +201,15 @@ locate_vrchat_prefix() {
         log_success "Using VRChat prefix at: $VRC_COMPATDATA"
     else
         log_error "Error: Running non-interactively and prefix was not found."
-        echo "Set VRC_COMPATDATA=/path/to/compatdata/438100 or run interactively in a terminal."
+        echo "Set VRC_COMPATDATA=/path/to/compatdata/438100 or pass --prefix <PATH>."
         exit 1
     fi
 }
 
 configure_protontricks_permissions() {
     if flatpak list 2>/dev/null | grep -q "protontricks"; then
-        log_info "Updating flatpak permissions for protontricks..."
+        log_info "Updating flatpak sandbox permissions for protontricks..."
+        if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
         flatpak override --user --filesystem=host com.github.Matoking.protontricks || true
         flatpak override --user --talk-name=org.mpris.MediaPlayer2.* com.github.Matoking.protontricks || true
         flatpak override --user --talk-name=org.freedesktop.Flatpak com.github.Matoking.protontricks || true
@@ -128,7 +217,9 @@ configure_protontricks_permissions() {
 }
 
 apply_wpf_registry_fix() {
-    log_info "Applying WPF hardware acceleration registry fix (fixes black window bug)..."
+    log_info "Applying WPF hardware acceleration registry fix (prevents black window bug)..."
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
     local reg_file="$VRC_COMPATDATA/pfx/drive_c/vrcosc_disable_hw_acc.reg"
 
     cat << 'EOF' > "$reg_file"
@@ -147,6 +238,12 @@ EOF
 }
 
 install_dotnet_runtime() {
+    local installed_dotnet="$VRC_COMPATDATA/pfx/drive_c/Program Files/dotnet/dotnet.exe"
+    if [ -f "$installed_dotnet" ] && [ "$FORCE_INSTALL" -ne 1 ]; then
+        log_success ".NET Runtime already present in prefix ($installed_dotnet). Skipping download (use --force to reinstall)."
+        return 0
+    fi
+
     log_info "Fetching latest .NET 10.0 Desktop Runtime download URL..."
     local dotnet_url
     dotnet_url=$(curl -s https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json \
@@ -159,6 +256,8 @@ install_dotnet_runtime() {
 
     log_info "Downloading .NET 10.0 from: $dotnet_url"
     local dotnet_installer="$VRC_COMPATDATA/pfx/drive_c/windowsdesktop-runtime-10.exe"
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
     curl -L -o "$dotnet_installer" "$dotnet_url"
 
     log_info "Installing .NET 10.0 Desktop Runtime in VRChat prefix..."
@@ -168,26 +267,43 @@ install_dotnet_runtime() {
 }
 
 install_vrcosc() {
-    log_info "Fetching latest VRCOSC release version..."
+    log_info "Fetching latest VRCOSC release version (channel: $VRCOSC_BRANCH)..."
     local latest_release_json nupkg_url
     latest_release_json=$(curl -s https://api.github.com/repos/VolcanicArts/VRCOSC/releases/latest)
-    nupkg_url=$(echo "$latest_release_json" | grep -o 'https://github.com/VolcanicArts/VRCOSC/releases/download/[^"]*live-full.nupkg' | head -n 1)
+
+    local pkg_pattern="live-full.nupkg"
+    if [ "$VRCOSC_BRANCH" = "beta" ]; then
+        pkg_pattern="beta-full.nupkg"
+    fi
+
+    nupkg_url=$(echo "$latest_release_json" | grep -o "https://github.com/VolcanicArts/VRCOSC/releases/download/[^\"]*${pkg_pattern}" | head -n 1)
+
+    # Fallback to any full nupkg if channel-specific filename differs
+    if [ -z "$nupkg_url" ]; then
+        nupkg_url=$(echo "$latest_release_json" | grep -o 'https://github.com/VolcanicArts/VRCOSC/releases/download/[^"]*-full.nupkg' | head -n 1)
+    fi
 
     if [ -z "$nupkg_url" ]; then
-        log_error "Error: Failed to fetch the VRCOSC live package URL."
+        log_error "Error: Failed to fetch the VRCOSC $VRCOSC_BRANCH package URL."
         exit 1
     fi
 
     log_info "Downloading VRCOSC package from: $nupkg_url"
     local nupkg_file="/tmp/vrcosc-latest.nupkg"
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
     curl -L -o "$nupkg_file" "$nupkg_url"
 
     VRCOSC_DIR="$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC"
+    if [ "$VRCOSC_BRANCH" = "beta" ]; then
+        VRCOSC_DIR="$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC-beta"
+    fi
+
     log_info "Installing VRCOSC to $VRCOSC_DIR..."
     mkdir -p "$VRCOSC_DIR"
 
-    # Clean old binaries
-    rm -rf "$VRCOSC_DIR"/*
+    # Clean previous installation binaries
+    rm -rf "${VRCOSC_DIR:?}"/*
 
     local temp_extract="/tmp/vrcosc-extract"
     rm -rf "$temp_extract"
@@ -201,61 +317,109 @@ install_vrcosc() {
 }
 
 configure_firewall() {
-    log_info "Configuring firewall for OSC and OSCQuery mDNS ports (9000/9001/5353 UDP)..."
+    if [ "$SKIP_FIREWALL" -eq 1 ]; then
+        log_info "Skipping firewall configuration (--skip-firewall)."
+        return 0
+    fi
+
+    log_info "Checking firewall configuration for OSC and OSCQuery mDNS ports (9000/9001/5353 UDP)..."
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
+    local applied=0
     if command -v firewall-cmd &>/dev/null; then
-        log_info "Using firewalld to open ports..."
-        sudo -n firewall-cmd --add-port=9000/udp --permanent 2>/dev/null || true
-        sudo -n firewall-cmd --add-port=9001/udp --permanent 2>/dev/null || true
-        sudo -n firewall-cmd --add-port=5353/udp --permanent 2>/dev/null || true
-        sudo -n firewall-cmd --reload 2>/dev/null || true
+        if sudo -n true 2>/dev/null; then
+            log_info "Applying firewalld rules..."
+            sudo -n firewall-cmd --add-port=9000/udp --permanent 2>/dev/null || true
+            sudo -n firewall-cmd --add-port=9001/udp --permanent 2>/dev/null || true
+            sudo -n firewall-cmd --add-port=5353/udp --permanent 2>/dev/null || true
+            sudo -n firewall-cmd --reload 2>/dev/null || true
+            applied=1
+        fi
     elif command -v ufw &>/dev/null; then
-        log_info "Using UFW to open ports..."
-        sudo -n ufw allow 9000/udp 2>/dev/null || true
-        sudo -n ufw allow 9001/udp 2>/dev/null || true
-        sudo -n ufw allow 5353/udp 2>/dev/null || true
-        sudo -n ufw reload 2>/dev/null || true
+        if sudo -n true 2>/dev/null; then
+            log_info "Applying UFW rules..."
+            sudo -n ufw allow 9000/udp 2>/dev/null || true
+            sudo -n ufw allow 9001/udp 2>/dev/null || true
+            sudo -n ufw allow 5353/udp 2>/dev/null || true
+            sudo -n ufw reload 2>/dev/null || true
+            applied=1
+        fi
     elif command -v iptables &>/dev/null; then
-        log_info "Using iptables to open ports..."
-        sudo -n iptables -I INPUT -p udp --dport 9000 -j ACCEPT 2>/dev/null || true
-        sudo -n iptables -I INPUT -p udp --dport 9001 -j ACCEPT 2>/dev/null || true
-        sudo -n iptables -I INPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+        if sudo -n true 2>/dev/null; then
+            log_info "Applying iptables rules..."
+            sudo -n iptables -I INPUT -p udp --dport 9000 -j ACCEPT 2>/dev/null || true
+            sudo -n iptables -I INPUT -p udp --dport 9001 -j ACCEPT 2>/dev/null || true
+            sudo -n iptables -I INPUT -p udp --dport 5353 -j ACCEPT 2>/dev/null || true
+            applied=1
+        fi
+    fi
+
+    if [ "$applied" -eq 0 ]; then
+        log_warn "Note: Automatic firewall rules were skipped (root privileges required)."
+        echo -e "If VRChat fails to auto-discover VRCOSC, manually allow UDP ports 9000, 9001, and 5353 in your firewall."
     else
-        echo "No supported firewall manager found or sudo required. Ensure UDP ports 9000, 9001, and 5353 are allowed."
+        log_success "Firewall rules configured successfully."
+    fi
+}
+
+install_application_icon() {
+    log_info "Installing VRCOSC application icon..."
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
+    local icon_dest_dir="$HOME/.local/share/icons/hicolor/256x256/apps"
+    mkdir -p "$icon_dest_dir"
+    curl -sL -o "$icon_dest_dir/vrcosc.png" "$ICON_URL" || true
+    if [ -f "$icon_dest_dir/vrcosc.png" ]; then
+        log_success "Application icon installed: $icon_dest_dir/vrcosc.png"
     fi
 }
 
 create_launchers() {
     log_info "Creating launch script and desktop entry..."
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
     local launch_script="$HOME/.local/bin/vrcosc"
+    local win_entry="C:/users/steamuser/AppData/Local/VRCOSC/VRCOSC.dll"
+    if [ "$VRCOSC_BRANCH" = "beta" ]; then
+        launch_script="$HOME/.local/bin/vrcosc-beta"
+        win_entry="C:/users/steamuser/AppData/Local/VRCOSC-beta/VRCOSC.dll"
+    fi
+
     mkdir -p "$(dirname "$launch_script")"
 
-    cat << 'EOF' > "$launch_script"
+    cat << EOF > "$launch_script"
 #!/usr/bin/env bash
 # VRCOSC Launcher for Linux/Proton
-ENTRY="C:/users/steamuser/AppData/Local/VRCOSC/VRCOSC.dll"
+ENTRY="$win_entry"
 DOTNET="C:/Program Files/dotnet/dotnet.exe"
 
-exec protontricks --no-bwrap -c "wine \"$DOTNET\" \"$ENTRY\" $*" 438100
+exec protontricks --no-bwrap -c "wine \\"\$DOTNET\\" \\"\$ENTRY\\" \$*" 438100
 EOF
     chmod +x "$launch_script"
 
     local desktop_entry="$HOME/.local/share/applications/vrcosc.desktop"
+    local app_name="VRCOSC"
+    if [ "$VRCOSC_BRANCH" = "beta" ]; then
+        desktop_entry="$HOME/.local/share/applications/vrcosc-beta.desktop"
+        app_name="VRCOSC (Beta)"
+    fi
+
     mkdir -p "$(dirname "$desktop_entry")"
 
     cat << EOF > "$desktop_entry"
 [Desktop Entry]
-Name=VRCOSC
+Name=$app_name
 Comment=OSC controller for VRChat
 Exec=$launch_script
-Icon=steam
+Icon=vrcosc
 Terminal=false
 Type=Application
-Categories=Game;
+Categories=Game;Utility;
 StartupWMClass=VRCOSC
 EOF
 
     log_success "=== VRCOSC Setup Complete! ==="
-    echo -e "You can launch VRCOSC from your application menu, or run '${BLUE}vrcosc${NC}' in the terminal."
+    echo -e "You can launch VRCOSC from your application menu, or run '${BLUE}$(basename "$launch_script")${NC}' in the terminal."
     echo -e "\n${BLUE}VRCOSC Directory Paths:${NC}"
     echo -e "  * ${GREEN}Config Folder (Profiles & Settings):${NC}"
     echo -e "    $VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Roaming/VRCOSC"
@@ -263,7 +427,48 @@ EOF
     echo -e "    $VRCOSC_DIR"
 }
 
+uninstall_vrcosc() {
+    log_warn "Starting VRCOSC uninstallation..."
+    locate_vrchat_prefix
+
+    local removed=0
+    # Remove installation directories
+    for dir in "$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC" \
+               "$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC-beta"; do
+        if [ -d "$dir" ]; then
+            log_info "Removing binaries: $dir"
+            rm -rf "$dir"
+            removed=1
+        fi
+    done
+
+    # Remove launchers
+    for f in "$HOME/.local/bin/vrcosc" "$HOME/.local/bin/vrcosc-beta" \
+             "$HOME/.local/share/applications/vrcosc.desktop" "$HOME/.local/share/applications/vrcosc-beta.desktop" \
+             "$HOME/.local/share/icons/hicolor/256x256/apps/vrcosc.png"; do
+        if [ -f "$f" ]; then
+            log_info "Removing file: $f"
+            rm -f "$f"
+            removed=1
+        fi
+    done
+
+    if [ "$removed" -eq 1 ]; then
+        log_success "VRCOSC successfully uninstalled."
+        echo -e "${YELLOW}Note: Your configurations in AppData/Roaming/VRCOSC have been preserved.${NC}"
+    else
+        log_info "Nothing found to uninstall."
+    fi
+}
+
 main() {
+    parse_arguments "$@"
+
+    if [ "$UNINSTALL_MODE" -eq 1 ]; then
+        uninstall_vrcosc
+        exit 0
+    fi
+
     echo -e "${BLUE}=== VRCOSC Bazzite/Linux Installer ===${NC}"
     check_dependencies
     locate_vrchat_prefix
@@ -272,6 +477,7 @@ main() {
     install_dotnet_runtime
     install_vrcosc
     configure_firewall
+    install_application_icon
     create_launchers
 }
 
