@@ -21,6 +21,7 @@ VRCOSC_BRANCH="live" # live or beta
 FORCE_INSTALL=0
 UNINSTALL_MODE=0
 BACKUP_MODE=0
+INFO_MODE=0
 DRY_RUN=0
 SKIP_FIREWALL=0
 VRC_COMPATDATA=""
@@ -66,6 +67,10 @@ print_usage() {
 parse_arguments() {
     while [ $# -gt 0 ]; do
         case "$1" in
+            -i|--info)
+                INFO_MODE=1
+                shift
+                ;;
             -b|--backup)
                 BACKUP_MODE=1
                 shift
@@ -204,6 +209,226 @@ locate_vrchat_prefix() {
         echo "Pass --prefix <PATH> explicitly."
         exit 1
     fi
+}
+
+show_diagnostics() {
+    log_info "Collecting diagnostic and environment information..."
+    echo ""
+
+    # System & OS Information
+    echo -e "${BOLD}=== System & OS Environment ===${NC}"
+    local os_pretty="Unknown"
+    if [ -f /etc/os-release ]; then
+        os_pretty="$(grep -E '^PRETTY_NAME=' /etc/os-release | cut -d'=' -f2- | tr -d '"')"
+    fi
+    local kernel_ver="$(uname -r 2>/dev/null || echo 'Unknown')"
+    local arch="$(uname -m 2>/dev/null || echo 'Unknown')"
+    local de="${XDG_CURRENT_DESKTOP:-Unknown}"
+    local session_type="${XDG_SESSION_TYPE:-Unknown}"
+    local desktop_session="${DESKTOP_SESSION:-Unknown}"
+
+    echo -e "  * OS:                    ${CYAN}${os_pretty}${NC}"
+    echo -e "  * Kernel:                ${CYAN}${kernel_ver} (${arch})${NC}"
+    echo -e "  * Desktop Environment:   ${CYAN}${de} (${session_type})${NC}"
+    echo -e "  * Session:               ${CYAN}${desktop_session}${NC}"
+
+    # Tooling
+    echo ""
+    echo -e "${BOLD}=== Tooling & Runtime Dependencies ===${NC}"
+    local pt_ver="Not installed"
+    if command -v protontricks &>/dev/null; then
+        pt_ver="$(protontricks --version 2>&1 | head -n 1)"
+    fi
+    local curl_ver="Not installed"
+    if command -v curl &>/dev/null; then
+        curl_ver="$(curl --version 2>&1 | head -n 1 | awk '{print $1, $2}')"
+    fi
+    local unzip_ver="Not installed"
+    if command -v unzip &>/dev/null; then
+        unzip_ver="Installed ($(which unzip))"
+    fi
+    local archiver="tar/xz"
+    if command -v 7z &>/dev/null; then
+        local z7_ver="$(7z 2>&1 | grep -i '7-Zip' | head -n 1 | awk '{print $2}')"
+        archiver="7z (${z7_ver:-installed})"
+    fi
+
+    echo -e "  * Protontricks:          ${CYAN}${pt_ver}${NC}"
+    echo -e "  * cURL:                  ${CYAN}${curl_ver}${NC}"
+    echo -e "  * Unzip:                 ${CYAN}${unzip_ver}${NC}"
+    echo -e "  * Compression Tool:      ${CYAN}${archiver}${NC}"
+
+    # Prefix & Wine Configuration
+    echo ""
+    echo -e "${BOLD}=== VRChat Proton Prefix ===${NC}"
+    if [ -z "$VRC_COMPATDATA" ]; then
+        local library_vdf="$HOME/.steam/root/steamapps/libraryfolders.vdf"
+        local candidate_paths=()
+        if [ -f "$library_vdf" ]; then
+            while IFS= read -r line; do
+                if [[ "$line" =~ \"path\"[[:space:]]*\"([^\"]+)\" ]]; then
+                    candidate_paths+=("${BASH_REMATCH[1]}")
+                fi
+            done < "$library_vdf"
+        fi
+        candidate_paths+=("$HOME/.local/share/Steam" "$HOME/.steam/steam" "$HOME/.steam/root")
+        for p in "${candidate_paths[@]}"; do
+            for check_dir in "$p" "$p/steamapps"; do
+                if [ -d "$check_dir/compatdata/438100/pfx" ]; then
+                    VRC_COMPATDATA="$check_dir/compatdata/438100"
+                    break 2
+                fi
+            done
+        done
+    fi
+
+    if [ -n "$VRC_COMPATDATA" ] && [ -d "$VRC_COMPATDATA/pfx" ]; then
+        echo -e "  * Prefix Root:           ${CYAN}${VRC_COMPATDATA}${NC}"
+        echo -e "  * Prefix pfx:            ${CYAN}${VRC_COMPATDATA}/pfx${NC}"
+
+        local user_reg_status="Missing"
+        [ -f "$VRC_COMPATDATA/pfx/user.reg" ] && user_reg_status="Present"
+        local sys_reg_status="Missing"
+        [ -f "$VRC_COMPATDATA/pfx/system.reg" ] && sys_reg_status="Present"
+
+        echo -e "  * Registry (user.reg):   ${CYAN}${VRC_COMPATDATA}/pfx/user.reg${NC} (${user_reg_status})"
+        echo -e "  * Registry (system.reg): ${CYAN}${VRC_COMPATDATA}/pfx/system.reg${NC} (${sys_reg_status})"
+
+        local wpf_disabled=0
+        if [ -f "$VRC_COMPATDATA/pfx/user.reg" ] && grep -q 'DisableHWAcceleration' "$VRC_COMPATDATA/pfx/user.reg"; then
+            wpf_disabled=1
+        elif [ -f "$VRC_COMPATDATA/pfx/system.reg" ] && grep -q 'DisableHWAcceleration' "$VRC_COMPATDATA/pfx/system.reg"; then
+            wpf_disabled=1
+        fi
+        if [ "$wpf_disabled" -eq 1 ]; then
+            echo -e "  * WPF HW Accel Patch:    ${GREEN}Applied (DisableHWAcceleration=1)${NC}"
+        else
+            echo -e "  * WPF HW Accel Patch:    ${YELLOW}Not detected (Black window issue may occur)${NC}"
+        fi
+
+        local dotnet_exe="$VRC_COMPATDATA/pfx/drive_c/Program Files/dotnet/dotnet.exe"
+        local dotnet_status="Not installed"
+        [ -f "$dotnet_exe" ] && dotnet_status="Installed ($dotnet_exe)"
+        echo -e "  * .NET Binary:           ${CYAN}${dotnet_status}${NC}"
+
+        local desktop_runtimes=()
+        local shared_dir="$VRC_COMPATDATA/pfx/drive_c/Program Files/dotnet/shared/Microsoft.WindowsDesktop.App"
+        if [ -d "$shared_dir" ]; then
+            for d in "$shared_dir/"*; do
+                if [ -d "$d" ]; then
+                    desktop_runtimes+=("$(basename "$d")")
+                fi
+            done
+        fi
+        if [ ${#desktop_runtimes[@]} -gt 0 ]; then
+            echo -e "  * .NET WindowsDesktop:   ${CYAN}${desktop_runtimes[*]}${NC}"
+        else
+            echo -e "  * .NET WindowsDesktop:   ${YELLOW}None detected${NC}"
+        fi
+
+        echo ""
+        echo -e "${BOLD}=== VRCOSC User Config Directories ===${NC}"
+        local cfgs_found=0
+        for u in "$VRC_COMPATDATA/pfx/drive_c/users/"*; do
+            local uname="$(basename "$u")"
+            if [ -d "$u/AppData/Roaming/VRCOSC" ]; then
+                local real_tgt=""
+                if [ -L "$u/AppData/Roaming/VRCOSC" ]; then
+                    real_tgt=" -> $(readlink "$u/AppData/Roaming/VRCOSC")"
+                fi
+                echo -e "  * User [${uname}] (Live):     ${CYAN}$u/AppData/Roaming/VRCOSC${NC}${real_tgt}"
+                cfgs_found=1
+            fi
+            if [ -d "$u/AppData/Roaming/VRCOSC-Beta" ]; then
+                local real_tgt=""
+                if [ -L "$u/AppData/Roaming/VRCOSC-Beta" ]; then
+                    real_tgt=" -> $(readlink "$u/AppData/Roaming/VRCOSC-Beta")"
+                fi
+                echo -e "  * User [${uname}] (Beta):     ${CYAN}$u/AppData/Roaming/VRCOSC-Beta${NC}${real_tgt}"
+                cfgs_found=1
+            fi
+        done
+        if [ "$cfgs_found" -eq 0 ]; then
+            echo -e "  * ${YELLOW}No active VRCOSC AppData config directories found.${NC}"
+        fi
+
+        echo ""
+        echo -e "${BOLD}=== VRCOSC Installation & Versions ===${NC}"
+        local local_ver_live="Not installed"
+        local live_dll="$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC/VRCOSC.dll"
+        local live_deps="$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC/VRCOSC.deps.json"
+        if [ -f "$live_deps" ]; then
+            local v="$(grep -o '"VRCOSC.App": "[^"]*"' "$live_deps" | head -n 1 | cut -d'"' -f4 || true)"
+            if [ -n "$v" ]; then
+                local_ver_live="$v"
+            else
+                local_ver_live="Installed"
+            fi
+        elif [ -f "$live_dll" ]; then
+            local_ver_live="Installed"
+        fi
+
+        local local_ver_beta="Not installed"
+        local beta_dll="$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC-beta/VRCOSC.dll"
+        local beta_deps="$VRC_COMPATDATA/pfx/drive_c/users/steamuser/AppData/Local/VRCOSC-beta/VRCOSC.deps.json"
+        if [ -f "$beta_deps" ]; then
+            local vb="$(grep -o '"VRCOSC.App": "[^"]*"' "$beta_deps" | head -n 1 | cut -d'"' -f4 || true)"
+            if [ -n "$vb" ]; then
+                local_ver_beta="$vb"
+            else
+                local_ver_beta="Installed"
+            fi
+        elif [ -f "$beta_dll" ]; then
+            local_ver_beta="Installed"
+        fi
+
+        echo -e "  * Local Version (Live):   ${CYAN}${local_ver_live}${NC}"
+        echo -e "  * Local Version (Beta):   ${CYAN}${local_ver_beta}${NC}"
+    else
+        echo -e "  * Prefix Root:           ${YELLOW}Not detected (use --prefix <PATH> if located on an external drive)${NC}"
+    fi
+
+    # Remote GitHub Releases
+    local remote_live="Unavailable (Network/Rate-limited)"
+    local remote_beta="Unavailable (Network/Rate-limited)"
+    local releases_json
+    releases_json="$(curl -s --connect-timeout 4 -H "User-Agent: vrcosc-installer" https://api.github.com/repos/VolcanicArts/VRCOSC/releases 2>/dev/null || true)"
+    if [ -n "$releases_json" ]; then
+        if command -v python3 &>/dev/null; then
+            remote_live="$(python3 -c "import json,sys; data=json.loads(sys.stdin.read()); print(next((r['tag_name'] for r in data if not r.get('prerelease')), 'Unavailable'))" <<< "$releases_json" 2>/dev/null || echo 'Unavailable')"
+            remote_beta="$(python3 -c "import json,sys; data=json.loads(sys.stdin.read()); print(next((r['tag_name'] for r in data if r.get('prerelease')), 'Unavailable'))" <<< "$releases_json" 2>/dev/null || echo 'Unavailable')"
+        else
+            remote_live="$(echo "$releases_json" | grep -B 10 -A 2 '"prerelease": false' | grep '"tag_name":' | head -n 1 | cut -d'"' -f4 || echo 'Unavailable')"
+            remote_beta="$(echo "$releases_json" | grep -B 10 -A 2 '"prerelease": true' | grep '"tag_name":' | head -n 1 | cut -d'"' -f4 || echo 'Unavailable')"
+        fi
+    fi
+    echo -e "  * Remote Latest (Live):   ${CYAN}${remote_live}${NC}"
+    echo -e "  * Remote Latest (Beta):   ${CYAN}${remote_beta}${NC}"
+
+    echo ""
+    echo -e "${BOLD}=== Integration & Launchers ===${NC}"
+    local cmd_live="Missing"
+    [ -f "$HOME/.local/bin/vrcosc" ] && cmd_live="Installed ($HOME/.local/bin/vrcosc)"
+    local cmd_beta="Missing"
+    [ -f "$HOME/.local/bin/vrcosc-beta" ] && cmd_beta="Installed ($HOME/.local/bin/vrcosc-beta)"
+    local desktop_live="Missing"
+    [ -f "$HOME/.local/share/applications/vrcosc.desktop" ] && desktop_live="Present ($HOME/.local/share/applications/vrcosc.desktop)"
+    local desktop_beta="Missing"
+    [ -f "$HOME/.local/share/applications/vrcosc-beta.desktop" ] && desktop_beta="Present ($HOME/.local/share/applications/vrcosc-beta.desktop)"
+    local icon_status="Missing"
+    [ -f "$HOME/.local/share/icons/hicolor/256x256/apps/vrcosc.png" ] && icon_status="Present ($HOME/.local/share/icons/hicolor/256x256/apps/vrcosc.png)"
+
+    echo -e "  * Command (vrcosc):        ${CYAN}${cmd_live}${NC}"
+    echo -e "  * Command (vrcosc-beta):   ${CYAN}${cmd_beta}${NC}"
+    echo -e "  * Desktop (Live):          ${CYAN}${desktop_live}${NC}"
+    echo -e "  * Desktop (Beta):          ${CYAN}${desktop_beta}${NC}"
+    echo -e "  * Icon:                    ${CYAN}${icon_status}${NC}"
+
+    echo ""
+    echo -e "${BOLD}=== Community & Support ===${NC}"
+    echo -e "  * Server Invite:           ${CYAN}${DISCORD_INVITE}${NC}"
+    echo -e "  * Linux Discussion:        ${CYAN}${DISCORD_THREAD}${NC}"
+    echo ""
 }
 
 create_backup() {
@@ -544,6 +769,11 @@ uninstall_vrcosc() {
 
 main() {
     parse_arguments "$@"
+
+    if [ "$INFO_MODE" -eq 1 ]; then
+        show_diagnostics
+        exit 0
+    fi
 
     if [ "$BACKUP_MODE" -eq 1 ]; then
         create_backup

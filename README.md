@@ -37,6 +37,7 @@ bash install.sh [OPTIONS]
 
 | Option | Description |
 | :--- | :--- |
+| `-i, --info` | Display diagnostic system, prefix, runtime, and VRCOSC environment details |
 | `-b, --backup` | Create a high-compression backup (`.7z` / `.tar.xz`) of VRCOSC configs & prefix registries to Desktop |
 | `-f, --force` | Force re-download and reinstall of .NET 10 and VRCOSC binaries |
 | `--branch <live\|beta>` | Choose release channel (`live` or `beta`, defaults to `live`) |
